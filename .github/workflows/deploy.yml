@@ -1,65 +1,61 @@
-# deploy.yml
+name: Deploy to Amazon ECS
 
-# 1. 触发器：当有代码 push 到 main 分支时自动运行
 on:
   push:
-    branches:
-      - main
+    branches: [ main ]
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    env:
+      AWS_REGION: us-east-2
+      CLUSTER_NAME: resume-copilot-cluster
+      SERVICE_NAME: resume-copilot-service   # ← 如果你用另一个服务名就改成它
+      ECR_REPO: resume-copilot
+
     steps:
-      # 2. 签出代码：把你的 GitHub 仓库代码下载到服务器上
       - name: Checkout
         uses: actions/checkout@v4
 
-      # 3. 配置 AWS 凭证：使用你之前存的 GitHub Secrets
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: us-east-2  # <-- 确认这是你的区域 (看你 ECR URI)
+          aws-region: ${{ env.AWS_REGION }}
 
-      # 4. 登录到 AWS ECR (你的私有码头)
       - name: Login to Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      # 5. 构建、标记并推送到 ECR
-      - name: Build, tag, and push image to Amazon ECR
-        id: build-image
+      - name: Build & Push Image
+        id: build
         env:
-          # 使用第 4 步的输出来获取 ECR 仓库地址
-          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          # 这是你创建的 ECR 仓库名称
-          ECR_REPOSITORY: resume-copilot
-          IMAGE_TAG: latest
+          REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
         run: |
-          # 运行 Docker build 命令 (和你在本地做的一样)
-          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
-          # 把镜像推送到 ECR
-          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
-          # 输出镜像的 URI，下一步要用
-          echo "::set-output name=image::$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
+          docker build -t $REGISTRY/${{ env.ECR_REPO }}:$IMAGE_TAG .
+          docker push $REGISTRY/${{ env.ECR_REPO }}:$IMAGE_TAG
+          echo "image=$REGISTRY/${{ env.ECR_REPO }}:$IMAGE_TAG" >> $GITHUB_OUTPUT
 
-      # 6. 下载你的 ECS 任务定义 "蓝图"
-      - name: Download task definition
+      - name: Download current task definition
         run: |
-          aws ecs describe-task-definition --task-definition resume-copilot-task \
-            --query '{family:taskDefinition.family,containerDefinitions:taskDefinition.containerDefinitions,volumes:taskDefinition.volumes,networkMode:taskDefinition.networkMode,memory:taskDefinition.memory,cpu:taskDefinition.cpu,placementConstraints:taskDefinition.placementConstraints,executionRoleArn:taskDefinition.executionRoleArn,taskRoleArn:taskDefinition.taskRoleArn,requiresCompatibilities:taskDefinition.requiresCompatibilities}' \
-            > task-definition.json
+          aws ecs describe-task-definition \
+            --task-definition resume-copilot-task \
+            --query taskDefinition > task-definition.json
 
-      # 7. 部署到 ECS Fargate
-      - name: Deploy to Amazon ECS
+      - name: Render task definition with new image
+        id: render
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: task-definition.json
+          container-name: resume-copilot-container
+          image: ${{ steps.build.outputs.image }}
+
+      - name: Deploy to ECS
         uses: aws-actions/amazon-ecs-deploy-task-definition@v1
         with:
-          # 使用我们刚下载的 task-definition.json 文件
-          task-definition: task-definition.json
-          # 这是你的 ECS 服务名称 (检查你的 AWS 截图)
-          service: resume-copilot-task-service-rzaghbcr # <-- 确认这是你的服务名
-          # 这是你的 ECS 集群名称
-          cluster: resume-copilot-cluster
-          # 告诉 AWS 部署后等待服务稳定
+          task-definition: ${{ steps.render.outputs.task-definition }}
+          service: ${{ env.SERVICE_NAME }}
+          cluster: ${{ env.CLUSTER_NAME }}
           wait-for-service-stability: true
