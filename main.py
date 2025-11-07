@@ -78,57 +78,51 @@ async def analyze_resume(resume_data: ResumeInput):
 
 # -----------------------------------------------
 # 🟢 新增的 API 接口：接受纯文本 (text/plain)
+# 使用 GitHub Models API，与 /analyze 一致
 # -----------------------------------------------
+from fastapi import Body
+
 @app.post("/analyze_plain_text")
 async def analyze_resume_plain_text(
-    # 关键! 这告诉 FastAPI: "请把整个请求体(body)当作一个字符串"
-    # ... 表示这个字段是必需的
     resume_text: str = Body(..., media_type="text/plain")
 ):
-
-    # --- (下面的 AI 调用逻辑和之前完全一样) ---
-
-    # 1. 准备要发送给 OpenAI 的数据
     headers = {
-        "Authorization": f"Bearer {OPENAI_API_KEY}",
-        "Content-Type": "application/json"
+        "Authorization": f"Bearer {GITHUB_TOKEN}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "Content-Type": "application/json",
     }
 
-    prompt = f"""
-    You are a professional resume reviewer. 
-    Analyze the following resume text and provide 3-5 actionable suggestions for improvement.
-
-    Resume Text:
-    "{resume_text}"
-
-    Suggestions:
-    """
+    prompt = (
+        "You are a professional resume reviewer. "
+        "Analyze the following resume text and provide 3-5 actionable suggestions for improvement.\n\n"
+        f"Resume Text:\n\"{resume_text}\"\n\n"
+        "Suggestions:"
+    )
 
     payload = {
-        "model": "gpt-4-turbo",  # 或者 "gpt-3.5-turbo"
+        "model": "openai/gpt-4o-mini",  # ✅ 用你在 GitHub Models 上能用的模型
         "messages": [
             {"role": "system", "content": "You are a helpful assistant."},
-            {"role": "user", "content": prompt}
+            {"role": "user", "content": prompt},
         ],
-        "temperature": 0.7
+        "temperature": 0.7,
     }
 
-    # 2. 使用 httpx 异步发送 POST 请求
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(timeout=60.0) as client:
         try:
-            response = await client.post(OPENAI_API_URL, headers=headers, json=payload, timeout=60.0)
-            response.raise_for_status() 
+            response = await client.post(GITHUB_API_URL, headers=headers, json=payload)
+            response.raise_for_status()
 
-            # 3. 解析 AI 的响应
-            ai_response_data = response.json()
-            ai_suggestion = ai_response_data["choices"][0]["message"]["content"]
-
-            # 4. 把 AI 的建议返回给我们的用户
+            data = response.json()
+            # 解析返回内容
+            ai_suggestion = data["choices"][0]["message"]["content"]
             return {"ai_suggestion": ai_suggestion}
 
         except httpx.HTTPStatusError as e:
-            # 处理来自 OpenAI 的错误
-            return {"error": f"OpenAI API error: {e}"}
+            return {
+                "error": f"GitHub API error: {e.response.status_code}",
+                "details": e.response.text,
+            }
         except Exception as e:
-            # 处理其他未知错误
-            return {"error": f"An unexpected error occurred: {e}"}
+            return {"error": f"Unexpected error: {e}"}
