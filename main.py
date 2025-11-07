@@ -2,11 +2,11 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import httpx
 import os
-from dotenv import load_dotenv, find_dotenv
+
 
 # 1) 更稳的 .env 加载
 env_path = find_dotenv()
-load_dotenv(env_path)
+
 
 # 2) 统一用 GITHUB_TOKEN（与 curl 一致）
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
